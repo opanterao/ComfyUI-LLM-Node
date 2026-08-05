@@ -1,2 +1,3 @@
-requests # HTTP client
+openai    # official OpenAI SDK (chat completions client)
+requests  # HTTP client (model list)
 Pillow    # image processing

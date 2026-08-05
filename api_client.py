@@ -1,37 +1,30 @@
 """
-A minimal, openai-compatible HTTP client used by all LLM nodes.
+A minimal, openai-compatible client used by all LLM nodes.
 
-Unlike a provider-locked plugin, this client has NO built-in provider. Every
-request targets a user-provided ``base_url`` pointing at any OpenAI-compatible
-chat/completion server (e.g. a local vLLM/Ollama gateway, a private proxy, or
-any vendor exposing an OpenAI-style REST API).
+This client wraps the official ``openai`` SDK so it uses the same battle-tested
+HTTP/httpx transport that works reliably against OpenAI-compatible servers
+(e.g. the CSYIDC API platform), avoiding the intermittent TLS failures seen with
+hand-rolled ``requests`` POSTs of large image payloads.
+
+There is NO built-in provider. Every request targets a user-provided
+``base_url`` pointing at any OpenAI-compatible chat/completion server (a local
+vLLM/Ollama gateway, a private proxy, or any vendor exposing an OpenAI-style
+REST API).
 """
 
 import json
-import time
 from urllib.parse import urljoin
 
 import requests
 
+from openai import OpenAI
+
 from . import config
-
-
-def _is_retryable(exc):
-    """
-    True for transient transport-level failures (connection refused/reset,
-    TLS/SSL errors, timeouts) that can succeed on a retry. HTTP 4xx responses
-    are NOT retryable here because raise_for_status() only raises for 4xx/5xx;
-    we only retry when the request raises a RequestException (i.e. never made it
-    to a completed HTTP response).
-    """
-    return isinstance(exc, (requests.exceptions.ConnectionError,
-                            requests.exceptions.Timeout,
-                            requests.exceptions.SSLError))
 
 
 class LLMClient:
     """
-    Wraps the OpenAI-compatible Chat Completions API.
+    Wraps the OpenAI-compatible Chat Completions API via the openai SDK.
 
     Attributes:
         base_url:  User-provided endpoint root (required, non-empty).
@@ -39,12 +32,29 @@ class LLMClient:
         timeout:   Request timeout in seconds.
     """
 
+    # Parameters the openai SDK accepts directly as named arguments.
+    _NATIVE_PARAMS = {
+        "max_tokens",
+        "top_p",
+        "frequency_penalty",
+        "presence_penalty",
+        "stop",
+        "max_completion_tokens",
+    }
+
     def __init__(self, base_url: str, api_key: str = "", timeout: int = None):
         if not base_url or not base_url.strip():
             raise ValueError("base_url is required. Please provide an OpenAI-compatible endpoint.")
         self.base_url = base_url.strip().rstrip("/")
         self.api_key = (api_key or "").strip()
         self.timeout = self.validate_timeout(timeout)
+        # openai SDK requires a non-empty api_key even for auth-less endpoints,
+        # so fall back to a harmless placeholder.
+        self._client = OpenAI(
+            api_key=self.api_key or "sk-none",
+            base_url=self.base_url,
+            timeout=self.timeout,
+        )
 
     # ------------------------------------------------------------------ #
     # Validation helpers                                                  #
@@ -74,7 +84,7 @@ class LLMClient:
         return config.DEFAULT_REASONING_EFFORT
 
     # ------------------------------------------------------------------ #
-    # Request plumbing                                                    #
+    # Model list (still uses a lightweight requests GET)                  #
     # ------------------------------------------------------------------ #
     def _headers(self):
         headers = {
@@ -122,7 +132,7 @@ class LLMClient:
             return []
 
     # ------------------------------------------------------------------ #
-    # Main chat completion                                                #
+    # Main chat completion (via openai SDK)                               #
     # ------------------------------------------------------------------ #
     def chat_completion(
         self,
@@ -136,16 +146,15 @@ class LLMClient:
         if not model or not str(model).strip():
             raise ValueError("model is required. Please enter a model id for your endpoint.")
         """
-        Perform a chat completion request.
+        Perform a chat completion request via the openai SDK.
 
         Returns a dict containing:
-            text          - the text content of the reply
-            images        - list of raw base64 image strings (if any)
-            response_ms   - server-reported latency (if any)
-            usage         - usage dict (if any)
-            model         - the model actually used
+            text   - the text content of the reply
+            usage  - usage dict (if any)
+            model  - the model actually used
 
-        Raises requests.exceptions.RequestException on transport errors.
+        Raises openai.APIError subclasses (e.g. APIConnectionError, APIStatusError)
+        on transport/timeout errors and bad HTTP responses.
         """
         # Normalize stored message dicts (which may carry extra metadata such as
         # timestamp/session_key/summary) down to only the fields the API accepts.
@@ -164,89 +173,58 @@ class LLMClient:
             cleaned_messages.append(clean)
         messages = cleaned_messages
 
-        data = {
+        create_kwargs = {
             "model": model,
             "messages": messages,
             "temperature": self.validate_temperature(temperature),
             "seed": int(seed),
         }
 
-        validated_effort = self.validate_reasoning_effort(reasoning_effort or config.DEFAULT_REASONING_EFFORT)
+        validated_effort = self.validate_reasoning_effort(
+            reasoning_effort or config.DEFAULT_REASONING_EFFORT
+        )
         if validated_effort != "auto":
-            data["reasoning_effort"] = validated_effort
+            create_kwargs["reasoning_effort"] = validated_effort
 
+        # Split extra params into SDK-native named args vs. extra_body for
+        # non-standard fields (e.g. top_k).
+        extra_body = {}
         if extra_params:
             for key, value in extra_params.items():
-                if value is not None and value != "":
-                    data[key] = value
-
-        url = urljoin(self.base_url + "/", "chat/completions")
-
-        # Retry transient transport errors (connection/TLS/timeouts) a few times
-        # with a short backoff, so intermittent failures don't abort the node.
-        max_retries = getattr(config, "REQUEST_MAX_RETRIES", 3)
-        last_exc = None
-        for attempt in range(max_retries):
-            try:
-                resp = requests.post(url, headers=self._headers(), json=data, timeout=self.timeout)
-                resp.raise_for_status()
-                break
-            except (requests.exceptions.ConnectionError,
-                    requests.exceptions.Timeout,
-                    requests.exceptions.SSLError) as e:
-                last_exc = e
-                if attempt < max_retries - 1:
-                    time.sleep(1.0 * (attempt + 1))
-        else:
-            raise last_exc
-
-        result = resp.json()
-
-        message = (result.get("choices") or [{}])[0].get("message") or {}
-        text = message.get("content") or ""
-
-        # Normalize every image source into a plain base64 data string.
-        images = []
-
-        def add_image_data(url_val):
-            if isinstance(url_val, str) and url_val.startswith("data:image"):
-                return url_val.split(",", 1)[1] if "," in url_val else url_val
-            return None
-
-        # Modern format: message["images"] = [{"image_url": {...}}]
-        for img in message.get("images") or []:
-            if isinstance(img, dict):
-                url_val = img.get("image_url") or {}
-                if isinstance(url_val, dict):
-                    url_val = url_val.get("url")
-                image_data = add_image_data(url_val)
-            elif isinstance(img, str):
-                image_data = add_image_data(img)
-            else:
-                image_data = None
-            if image_data:
-                images.append(image_data)
-
-        # Legacy multimodal content: text may be a list of blocks containing
-        # image_url blocks.
-        if isinstance(text, list):
-            parts = []
-            for item in text:
-                if not isinstance(item, dict):
-                    parts.append(str(item))
+                if value is None or value == "":
                     continue
-                if item.get("type") == "text":
-                    parts.append(item.get("text", ""))
-                elif item.get("type") == "image_url":
-                    data = add_image_data((item.get("image_url") or {}).get("url"))
-                    if data:
-                        images.append(data)
-            text = "\n".join(parts)
+                if key in self._NATIVE_PARAMS:
+                    create_kwargs[key] = value
+                else:
+                    extra_body[key] = value
+        if extra_body:
+            create_kwargs["extra_body"] = extra_body
+
+        result = self._client.chat.completions.create(**create_kwargs)
+
+        message = result.choices[0].message if result.choices else None
+        text = ""
+        if message is not None:
+            if isinstance(message.content, list):
+                text = "\n".join(
+                    str(item.get("text", ""))
+                    for item in message.content
+                    if isinstance(item, dict) and item.get("type") == "text"
+                )
+            elif message.content is not None:
+                text = str(message.content)
+
+        usage = result.usage
+        usage_dict = {}
+        if usage is not None:
+            usage_dict = {
+                "prompt_tokens": getattr(usage, "prompt_tokens", None),
+                "completion_tokens": getattr(usage, "completion_tokens", None),
+                "total_tokens": getattr(usage, "total_tokens", None),
+            }
 
         return {
             "text": text,
-            "images": images,
-            "response_ms": result.get("response_ms"),
-            "usage": result.get("usage", {}),
-            "model": result.get("model", model),
+            "usage": usage_dict,
+            "model": getattr(result, "model", None) or model,
         }

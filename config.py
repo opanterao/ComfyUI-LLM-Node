@@ -17,11 +17,6 @@ DEFAULT_REQUEST_TIMEOUT = 120
 MIN_REQUEST_TIMEOUT = 1
 MAX_REQUEST_TIMEOUT = 3600
 
-# --- Retry -----------------------------------------------------------------
-# Number of attempts (>=1) for a single chat completion against transient
-# transport errors (connection/TLS/timeout). HTTP 4xx/5xx are not retried.
-REQUEST_MAX_RETRIES = 3
-
 # --- Reasoning effort ------------------------------------------------------
 REASONING_EFFORT_OPTIONS = ("auto", "none", "minimal", "low", "medium", "high", "xhigh")
 DEFAULT_REASONING_EFFORT = "auto"

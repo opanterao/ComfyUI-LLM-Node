@@ -55,7 +55,6 @@ for sub in ("config", "api_client", "node", "nodes"):
 
 node_mod = sys.modules[f"{pkg.__name__}.node"]
 nodes_mod = sys.modules[f"{pkg.__name__}.nodes"]
-api_mod = sys.modules[f"{pkg.__name__}.api_client"]
 
 
 def _default_params(**overrides):
@@ -76,35 +75,31 @@ def _default_params(**overrides):
 
 class RefDescribeTests(unittest.TestCase):
     def setUp(self):
-        self.post = Mock()
-        api_mod.requests.post = self.post
-        api_mod.requests.get = Mock()
+        # The node calls LLMClient(base_url, api_key, timeout) then
+        # client.chat_completion(...). Because nodes.py imports LLMClient via a
+        # relative import that resolves to its own module copy, we mock the
+        # bound name `nodes_mod.LLMClient` so no real network request is made.
+        self.LLMClient = Mock()
+        nodes_mod.LLMClient = self.LLMClient
 
-    def _success_response(self, content):
-        r = Mock()
-        r.raise_for_status = Mock()
-        r.json.return_value = {
-            "choices": [{"message": {"content": content}}],
-            "usage": {"prompt_tokens": 1, "completion_tokens": 1},
-        }
-        return r
+        self.calls = {"n": 0}
+
+        def chat_side_effect(**kwargs):
+            self.calls["n"] += 1
+            messages = kwargs.get("messages", [])
+            last = messages[-1] if messages else {}
+            content = last.get("content")
+            if isinstance(content, list):  # image-describe call
+                return {"text": "described content", "usage": {}, "model": "m"}
+            return {"text": "FINAL OUTPUT", "usage": {}, "model": "m"}  # combine
+
+        self.LLMClient.return_value.chat_completion.side_effect = chat_side_effect
 
     def test_describes_each_image_then_combines(self):
         import torch as real_torch
         img = real_torch.zeros((1, 8, 8, 3), dtype=real_torch.float32)
         nodes_mod.image_to_base64 = Mock(return_value="fakebase64data")
 
-        calls = {"n": 0}
-
-        def side_effect(*args, **kwargs):
-            payload = kwargs.get("json", {})
-            calls["n"] += 1
-            content = payload.get("messages", [])[-1].get("content")
-            if isinstance(content, list):  # image-describe call
-                return self._success_response("described content")
-            return self._success_response("FINAL OUTPUT")  # combine call
-
-        self.post.side_effect = side_effect
         out = nodes_mod.CSYIDCRefDescribeNode().describe(
             base_url="https://x/v1", api_key="k",
             system_prompt="combine", image_instruction="describe it",
@@ -113,7 +108,7 @@ class RefDescribeTests(unittest.TestCase):
             **_default_params(),
         )
         self.assertEqual(out[0], "FINAL OUTPUT")
-        self.assertEqual(calls["n"], 3)  # 2 describes + 1 combine
+        self.assertEqual(self.calls["n"], 3)  # 2 describes + 1 combine
 
     def test_ref_describe_requires_image(self):
         out = nodes_mod.CSYIDCRefDescribeNode().describe(
@@ -124,7 +119,7 @@ class RefDescribeTests(unittest.TestCase):
             **_default_params(),
         )
         self.assertIn("at least one reference image", out[0])
-        self.post.assert_not_called()
+        self.assertEqual(self.calls["n"], 0)  # no chat request made
 
     def test_ref_describe_enforces_max_images(self):
         import torch as real_torch
@@ -138,7 +133,7 @@ class RefDescribeTests(unittest.TestCase):
             ref_image_1=img, **_default_params(), **kwargs,
         )
         self.assertIn("too many images", out[0])
-        self.post.assert_not_called()
+        self.assertEqual(self.calls["n"], 0)  # no chat request made
 
     def test_registered_only_ref_describe(self):
         self.assertEqual(set(nodes_mod.NODE_CLASS_MAPPINGS), {"CSYIDC-RefDescribe"})
