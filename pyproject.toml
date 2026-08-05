@@ -6,10 +6,10 @@ license = {file = "LICENSE"}
 dependencies = ["requests", "Pillow", "numpy"]
 
 [project.urls]
-Repository = "https://github.com/your-username/ComfyUI-LLM-Node"
+Repository = "https://github.com/opanterao/ComfyUI-LLM-Node"
 #  Used by Comfy Registry https://comfyregistry.org
 
 [tool.comfy]
-PublisherId = "your-publisher-id"
+PublisherId = "opanterao"
 DisplayName = "ComfyUI-LLM-Node"
 Icon = ""
