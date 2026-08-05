@@ -22,9 +22,14 @@ def _input_keys(kwargs, prefix="image"):
     return sorted(result, key=lambda k: int(k[len(marker):]))
 
 
-def image_to_base64(image):
+def image_to_base64(image, max_size=1024):
     """
     Convert a ComfyUI IMAGE tensor (BHWC, float 0-1) into a base64 PNG string.
+
+    ``max_size``: if > 0, the image is downscaled so its longest side does not
+    exceed this many pixels before encoding. Resizing keeps the request body
+    small and avoids intermittent timeouts/TLS failures on large uploads.
+    Pass ``max_size=0`` (or a falsy value) to skip resizing entirely.
     """
     if not isinstance(image, torch.Tensor):
         raise TypeError("Input 'image' is not a torch.Tensor")
@@ -45,6 +50,15 @@ def image_to_base64(image):
         image_np = (image_np * 255).astype(np.uint8)
 
     pil_image = Image.fromarray(image_np, "RGB")
+
+    if max_size and max_size > 0:
+        width, height = pil_image.size
+        longest = max(width, height)
+        if longest > max_size:
+            scale = max_size / float(longest)
+            new_size = (max(1, int(width * scale)), max(1, int(height * scale)))
+            pil_image = pil_image.resize(new_size, Image.LANCZOS)
+
     buffered = io.BytesIO()
     pil_image.save(buffered, format="PNG")
     return base64.b64encode(buffered.getvalue()).decode("utf-8")

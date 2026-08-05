@@ -99,6 +99,10 @@ class CSYIDCRefDescribeNode:
                 "presence_penalty": ("FLOAT", {"default": config.DEFAULT_PRESENCE_PENALTY, "min": -2.0, "max": 2.0, "step": 0.01, "display": "slider"}),
                 "stop": ("STRING", {"multiline": True, "default": "", "placeholder": "Comma-separated stop sequences (optional)"}),
                 "request_timeout": ("INT", {"default": 300, "min": 1, "max": 3600, "step": 1}),
+                "max_image_size": ("INT", {
+                    "default": 1024, "min": 0, "max": 4096, "step": 1,
+                    "display": "number",
+                }),
             },
             "optional": {
                 "user_instruction": ("STRING", {"forceInput": True, "default": ""}),
@@ -135,9 +139,9 @@ class CSYIDCRefDescribeNode:
         return params
 
     def _describe_image(self, client, model, temperature, seed, reasoning_effort,
-                        instruction, image_tensor, extra_params):
+                        instruction, image_tensor, extra_params, max_image_size=1024):
         """Run the VLM once on a single image and return its description text."""
-        b64 = image_to_base64(image_tensor)
+        b64 = image_to_base64(image_tensor, max_size=max_image_size)
         messages = [
             {"role": "system", "content": "You are a careful image analyst."},
             {
@@ -183,6 +187,7 @@ class CSYIDCRefDescribeNode:
             return (f"Error: {client}",)
 
         user_instruction = kwargs.get("user_instruction") or ""
+        max_image_size = kwargs.get("max_image_size")
 
         images = []
         for key in _input_keys(kwargs, "ref_image"):
@@ -213,6 +218,7 @@ class CSYIDCRefDescribeNode:
                 desc = self._describe_image(
                     client, model, temperature, seed, reasoning_effort,
                     per_image_instruction, tensor, extra_params,
+                    max_image_size=max_image_size,
                 )
             except Exception as e:
                 return (f"Error describing {key}: {e}",)

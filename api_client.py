@@ -16,6 +16,19 @@ import requests
 from . import config
 
 
+def _is_retryable(exc):
+    """
+    True for transient transport-level failures (connection refused/reset,
+    TLS/SSL errors, timeouts) that can succeed on a retry. HTTP 4xx responses
+    are NOT retryable here because raise_for_status() only raises for 4xx/5xx;
+    we only retry when the request raises a RequestException (i.e. never made it
+    to a completed HTTP response).
+    """
+    return isinstance(exc, (requests.exceptions.ConnectionError,
+                            requests.exceptions.Timeout,
+                            requests.exceptions.SSLError))
+
+
 class LLMClient:
     """
     Wraps the OpenAI-compatible Chat Completions API.
@@ -168,8 +181,25 @@ class LLMClient:
                     data[key] = value
 
         url = urljoin(self.base_url + "/", "chat/completions")
-        resp = requests.post(url, headers=self._headers(), json=data, timeout=self.timeout)
-        resp.raise_for_status()
+
+        # Retry transient transport errors (connection/TLS/timeouts) a few times
+        # with a short backoff, so intermittent failures don't abort the node.
+        max_retries = getattr(config, "REQUEST_MAX_RETRIES", 3)
+        last_exc = None
+        for attempt in range(max_retries):
+            try:
+                resp = requests.post(url, headers=self._headers(), json=data, timeout=self.timeout)
+                resp.raise_for_status()
+                break
+            except (requests.exceptions.ConnectionError,
+                    requests.exceptions.Timeout,
+                    requests.exceptions.SSLError) as e:
+                last_exc = e
+                if attempt < max_retries - 1:
+                    time.sleep(1.0 * (attempt + 1))
+        else:
+            raise last_exc
+
         result = resp.json()
 
         message = (result.get("choices") or [{}])[0].get("message") or {}

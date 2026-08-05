@@ -61,6 +61,7 @@ app.registerExtension({
                 "presence_penalty": "presence_penalty (存在惩罚)",
                 "stop": "stop (停止序列)",
                 "request_timeout": "request_timeout (请求超时/秒)",
+                "max_image_size": "max_image_size (图片最长边/px, 0=不缩放) ",
                 "user_instruction": "user_instruction (用户指令)",
             };
 
