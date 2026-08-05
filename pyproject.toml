@@ -1,0 +1,15 @@
+[project]
+name = "comfyui_llm_node"
+description = "ComfyUI custom node that talks to any OpenAI-compatible endpoint (no built-in default provider)."
+version = "2.0.0"
+license = {file = "LICENSE"}
+dependencies = ["requests", "Pillow", "numpy"]
+
+[project.urls]
+Repository = "https://github.com/your-username/ComfyUI-LLM-Node"
+#  Used by Comfy Registry https://comfyregistry.org
+
+[tool.comfy]
+PublisherId = "your-publisher-id"
+DisplayName = "ComfyUI-LLM-Node"
+Icon = ""

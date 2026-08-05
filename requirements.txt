@@ -1,0 +1,2 @@
+requests # HTTP client
+Pillow    # image processing
