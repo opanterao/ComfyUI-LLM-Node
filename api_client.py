@@ -15,6 +15,7 @@ REST API).
 import json
 from urllib.parse import urljoin
 
+import httpx
 import requests
 
 from openai import OpenAI
@@ -50,10 +51,14 @@ class LLMClient:
         self.timeout = self.validate_timeout(timeout)
         # openai SDK requires a non-empty api_key even for auth-less endpoints,
         # so fall back to a harmless placeholder.
+        # trust_env=False makes httpx ignore environment/system proxies so the
+        # request always goes direct to base_url (avoids proxy-induced TLS
+        # failures such as BAD_RECORD_MAC / Connection errors).
         self._client = OpenAI(
             api_key=self.api_key or "sk-none",
             base_url=self.base_url,
             timeout=self.timeout,
+            http_client=httpx.Client(trust_env=False),
         )
 
     # ------------------------------------------------------------------ #

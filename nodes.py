@@ -6,6 +6,8 @@ and merges the descriptions into one text output, all against a user-supplied
 OpenAI-compatible endpoint (no built-in provider).
 """
 
+import traceback
+
 import torch
 
 from . import config
@@ -221,6 +223,7 @@ class CSYIDCRefDescribeNode:
                     max_image_size=max_image_size,
                 )
             except Exception as e:
+                traceback.print_exc()
                 return (f"Error describing {key}: {e}",)
             if not desc:
                 desc = "(no description returned)"
@@ -258,6 +261,7 @@ class CSYIDCRefDescribeNode:
                 extra_params=extra_params,
             )
         except Exception as e:
+            traceback.print_exc()
             return (f"API Request Error: {e}",)
 
         return (result.get("text") or "",)
