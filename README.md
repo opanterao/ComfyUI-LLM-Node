@@ -1,3 +1,5 @@
+**English** · [简体中文](README_zh.md)
+
 # ComfyUI Multi-Reference Image Describe Node
 
 A ComfyUI custom node that talks to **any OpenAI-compatible chat/completion

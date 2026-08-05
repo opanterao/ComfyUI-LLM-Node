@@ -1,3 +1,5 @@
+[English](README.md) · **简体中文**
+
 # ComfyUI 多参考图描述节点
 
 一个 ComfyUI 自定义节点，可对接**任意 OpenAI 兼容的 chat/completion 端点**
